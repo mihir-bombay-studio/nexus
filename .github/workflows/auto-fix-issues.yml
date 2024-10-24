@@ -8,7 +8,7 @@ permissions:
   contents: write
   issues: write
   pull-requests: write
-  actions: read
+  actions: read  # Add this line
 
 jobs:
   check_debounce:
@@ -39,8 +39,39 @@ jobs:
             core.setOutput('hasLabel', String(hasLabel));
             core.setOutput('isPR', String(isPR));
 
+      - name: Debug Outputs
+        run: |
+          echo "hasLabel = ${{ steps.check_issue.outputs.hasLabel }}"
+          echo "isPR = ${{ steps.check_issue.outputs.isPR }}"
+
       - name: Exit if conditions not met
         if: steps.check_issue.outputs.hasLabel != 'true' || steps.check_issue.outputs.isPR == 'true'
+        run: exit 0
+
+      - name: Check for In-Progress Runs
+        id: check_running
+        uses: actions/github-script@v6
+        with:
+          script: |
+            const issueNumber = context.issue.number;
+            const workflowName = context.workflow;
+            const runs = await github.rest.actions.listWorkflowRunsForRepo({
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              per_page: 100,
+              status: 'in_progress',
+            });
+            const inProgressRuns = runs.data.workflow_runs.filter(run => {
+              return run.name === workflowName && run.id !== context.runId && run.head_branch === `fix/issue-${issueNumber}`;
+            });
+            if (inProgressRuns.length > 0) {
+              console.log(`Another run is in progress for issue #${issueNumber}. Exiting.`);
+              core.setOutput('exit', 'true');
+            } else {
+              core.setOutput('exit', 'false');
+            }
+      - name: Exit if Another Run is In Progress
+        if: steps.check_running.outputs.exit == 'true'
         run: exit 0
 
       - name: Checkout Repository
@@ -64,13 +95,18 @@ jobs:
         run: |
           set -xe
           branch_name="fix/issue-${{ github.event.issue.number }}"
+          # Fetch all branches and tags
           git fetch --all
+          # Check if the branch exists on remote
           if git ls-remote --exit-code --heads origin "$branch_name"; then
+            # Branch exists on remote, check it out and pull latest changes
             git checkout "$branch_name"
             git pull origin "$branch_name"
           else
+            # Branch doesn't exist, create it based on default branch
             git checkout -b "$branch_name" origin/${{ github.event.repository.default_branch }}
           fi
+          # Merge default branch into your branch to ensure it's up to date
           git merge --no-edit origin/${{ github.event.repository.default_branch }}
 
       - name: Set up Python
@@ -81,11 +117,10 @@ jobs:
 
       - name: Install Dependencies
         if: steps.check_issue.outputs.hasLabel == 'true' && steps.check_issue.outputs.isPR != 'true'
-        run: |
-          pip install --upgrade openai PyGithub requests
-          pip install git+https://github.com/openai/swarm.git
+        run: pip install --upgrade openai PyGithub requests
 
-      - name: Run Swarm Script
+      - name: Run OpenAI Script
+        id: run_openai_script  # Added ID to access outputs
         if: steps.check_issue.outputs.hasLabel == 'true' && steps.check_issue.outputs.isPR != 'true'
         env:
           OPENAI_API_KEY: ${{ secrets.OPENAI_API_KEY }}
@@ -94,38 +129,37 @@ jobs:
           ISSUE_NUMBER: ${{ github.event.issue.number }}
         run: |
           python scripts/generate_fix.py
-
-      - name: Check File Changes and Git Status
-        if: steps.check_issue.outputs.hasLabel == 'true' && steps.check_issue.outputs.isPR != 'true'
-        run: |
           echo "After generate_fix.py:"
           ls -la
-          echo "Content of modified files (if any):"
-          git diff --name-only --cached | xargs -I{} sh -c 'echo "--- {} ---"; cat {}'
           git status
-          git diff
 
       - name: Commit and Push Changes
-        id: commit_and_push
         if: steps.check_issue.outputs.hasLabel == 'true' && steps.check_issue.outputs.isPR != 'true'
         run: |
           set -xe
           branch_name="fix/issue-${{ github.event.issue.number }}"
+          # Add and commit changes
           git add -A
           git status
-          # Check for changes
-          if git diff-index --quiet HEAD; then
-            echo "No changes detected, skipping commit and push."
-            echo "changes_made=false" >> $GITHUB_OUTPUT
-            exit 0
+          git commit -m "Auto-fix for issue #${{ github.event.issue.number }}" || echo "No changes to commit."
+          # Check if remote branch exists
+          if git ls-remote --exit-code --heads origin "$branch_name"; then
+            # Remote branch exists, pull latest changes with rebase
+            git pull origin "$branch_name" --rebase --autostash || git rebase --abort
           else
-            git commit -m "Auto-fix for issue #${{ github.event.issue.number }}"
-            git push --set-upstream origin "$branch_name"
-            echo "changes_made=true" >> $GITHUB_OUTPUT
+            echo "Remote branch does not exist. Skipping pull."
           fi
+          # Push changes
+          git push --set-upstream origin "$branch_name"
+
+      - name: Verify Branch and List Branches
+        if: steps.check_issue.outputs.hasLabel == 'true' && steps.check_issue.outputs.isPR != 'true'
+        run: |
+          git branch -a
+          git status
 
       - name: Create or Update Pull Request
-        if: steps.commit_and_push.outputs.changes_made == 'true'
+        if: steps.check_issue.outputs.hasLabel == 'true' && steps.check_issue.outputs.isPR != 'true'
         uses: actions/github-script@v6
         with:
           script: |
@@ -133,12 +167,15 @@ jobs:
             const branchName = `fix/issue-${issueNumber}`;
             const prTitle = `Auto-fix for issue #${issueNumber}`;
             const prBody = `This pull request was automatically generated to address issue #${issueNumber}.`;
+
+            // Check if a pull request already exists
             const { data: pulls } = await github.rest.pulls.list({
               owner: context.repo.owner,
               repo: context.repo.repo,
               head: `${context.repo.owner}:${branchName}`,
               state: 'open',
             });
+
             if (pulls.length > 0) {
               console.log(`Pull request already exists: ${pulls[0].html_url}`);
             } else {
@@ -150,7 +187,55 @@ jobs:
                 base: context.payload.repository.default_branch,
                 body: prBody,
               });
+
               console.log(`Pull request created: ${response.data.html_url}`);
             }
         env:
           GITHUB_TOKEN: ${{ secrets.PAT_TOKEN }}
+
+      - name: Update development-preview Branch
+        if: steps.check_issue.outputs.hasLabel == 'true' && steps.check_issue.outputs.isPR != 'true'
+        run: |
+          set -xe
+          branch_name="fix/issue-${{ github.event.issue.number }}"
+          preview_branch="development-preview"
+          # Fetch all branches and tags
+          git fetch --all
+          # Check if the development-preview branch exists
+          if git ls-remote --exit-code --heads origin "$preview_branch"; then
+            # Checkout the development-preview branch
+            git checkout "$preview_branch"
+            # Reset it to match the PR branch
+            git reset --hard "origin/$branch_name"
+          else
+            # Create the development-preview branch from the PR branch
+            git checkout -b "$preview_branch" "origin/$branch_name"
+          fi
+          # Push changes to development-preview branch
+          git push --force origin "$preview_branch"
+
+      - name: Check for Respond URL in Issue Description
+        if: steps.check_issue.outputs.hasLabel == 'true' && steps.check_issue.outputs.isPR != 'true'
+        id: check_respond_url
+        uses: actions/github-script@v6
+        with:
+          script: |
+            const issue = context.payload.issue;
+            const body = issue.body || '';
+            const respondUrlRegex = /Respond URL:\s*\[link\]\((.*?)\)/i;
+            const match = body.match(respondUrlRegex);
+            if (match && match[1]) {
+              core.setOutput('respond_url', match[1]);
+              console.log(`Found Respond URL: ${match[1]}`);
+            } else {
+              console.log('No Respond URL found.');
+              core.setOutput('respond_url', '');
+            }
+
+      - name: Make GET Request to Respond URL
+        if: steps.check_respond_url.outputs.respond_url != ''
+        run: |
+          echo "Making GET request to ${RESPOND_URL}"
+          curl -X GET "${RESPOND_URL}"
+        env:
+          RESPOND_URL: ${{ steps.check_respond_url.outputs.respond_url }}

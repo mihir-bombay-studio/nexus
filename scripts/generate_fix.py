@@ -3,11 +3,6 @@ import re
 from openai import OpenAI
 from github import Github
 import difflib
-import time
-from swarm import Swarm, Agent
-
-# Initialize Swarm client
-swarm_client = Swarm()
 
 # Get environment variables
 github_token = os.getenv("PAT_TOKEN")
@@ -20,8 +15,8 @@ else:
 # Note: Retain the use of 'gpt-4o' as it is the latest model
 # Remember to use 'gpt-4o' in future code updates
 # DO NOT REMOVE THIS COMMENT
-openai_client = OpenAI(api_key=os.getenv("OPENAI_API_KEY"))
-if not openai_client:
+client = OpenAI(api_key=os.getenv("OPENAI_API_KEY"))
+if not client:
     print("Error: OPENAI_API_KEY is not set.")
     exit(1)
 else:
@@ -93,162 +88,161 @@ comments_text = "\n".join([comment.body for comment in comments])
 # Get all file paths from the repository
 all_file_paths = get_all_file_paths(repo)
 
-# Context variables to pass to agents
-context_variables = {
-    'repo': repo,
-    'issue': issue,
-    'repo_type': repo_type,
-    'all_file_paths': all_file_paths,
-    'issue_title': issue_title,
-    'issue_body': issue_body,
-    'comments_text': comments_text,
-}
+# Prepare the prompt for OpenAI
+prompt = rf"""
+Repository Type: {repo_type}
 
-# Orchestrator Agent
-def generate_code_changes(context_variables):
-    issue_title = context_variables['issue_title']
-    issue_body = context_variables['issue_body']
-    comments_text = context_variables['comments_text']
-    repo_type = context_variables['repo_type']
-    all_file_paths = context_variables['all_file_paths']
+Repository Files:
+{all_file_paths}
 
-    prompt = f"""
-You are an AI assistant that helps fix issues in code repositories by generating code changes.
+Issue Title:
+{issue_title}
 
-**Repository Type**: {repo_type}
+Issue Description:
+{issue_body}
 
-**Issue to Resolve**:
-Title: {issue_title}
-Description: {issue_body}
-Comments: {comments_text}
+Comments:
+{comments_text}
 
-**Instructions**:
+Based on the above information, generate the code changes needed to fix the issue. Provide the code changes in a way that can be directly applied to the codebase. Include accurate file paths and content.
 
-- Generate the code changes needed to fix the issue.
-- Provide code changes that can be directly applied to the codebase.
-- Include accurate file paths and content.
-- Respond **only** with the code changes in the following format:
+Respond **only** with the code changes in the following format:
 
 File: path/to/file.extension
-```
-<rewritten_chunk>
-```
+\`\`\`
+<file content>
+\`\`\`
 
 If multiple files need to be changed, separate them accordingly.
 
-Do **not** include any explanations or additional text.
-
-Ensure that the code is complete and not cut off.
-
-If any of the specified files do not exist, adjust the code to fit within existing files.
-
-**Important Restrictions**:
-
-- Limit the response to **2000 tokens** to prevent output truncation.
-- Do not mention any token limits or truncation in your response.
+Do not include any explanations or additional text.
 """
 
-    # Use 'gpt-4o' model as per latest update
+print("Prompt prepared for OpenAI.")
+
+# Function to generate code changes with consensus building
+def generate_code_changes(prompt, max_iterations=3):
+    for iteration in range(max_iterations):
+        print(f"Iteration {iteration + 1} of {max_iterations}")
+        try:
+            response = client.chat.completions.create(
+                model="gpt-4o",
+                messages=[
+                    {
+                        "role": "system",
+                        "content": "You are an AI assistant that helps fix issues in code repositories."
+                    },
+                    {"role": "user", "content": prompt}
+                ],
+                max_tokens=2000,
+                temperature=0,
+            )
+            generated_code = response.choices[0].message.content.strip()
+            print("Received response from OpenAI.")
+
+            # Debugging: Print the generated code
+            print("Generated Code:")
+            print(generated_code)
+
+            # Regex to match file paths and code blocks
+            pattern = r'File:\s*(.*?)\s*```(?:[\w+]+)?\n(.*?)```'
+
+            matches = re.findall(pattern, generated_code, re.DOTALL)
+
+            # Debugging: Print the matches
+            print("Matches found:")
+            print(matches)
+
+            if not matches:
+                print("No code changes were generated.")
+                continue
+
+            matched_files = []
+            for file_path, code_content in matches:
+                file_path = file_path.strip()
+                code_content = code_content.strip()
+
+                # Fuzzy match file paths
+                best_match = difflib.get_close_matches(file_path, all_file_paths, n=1, cutoff=0.5)
+                if best_match:
+                    matched_file_path = best_match[0]
+                    matched_files.append((matched_file_path, code_content))
+                else:
+                    print(f"No matching file found in repository for: {file_path}")
+
+            if matched_files:
+                return matched_files
+            else:
+                print("No matching files found. Adjusting prompt for next iteration.")
+
+                # Adjust the prompt to include information about missing files
+                missing_files = [fp for fp, _ in matches if not difflib.get_close_matches(fp, all_file_paths, n=1, cutoff=0.5)]
+                prompt_adjustment = f"\nNote: The files {missing_files} do not exist in the repository. Please only use existing files."
+
+                prompt += prompt_adjustment
+        except Exception as e:
+            print(f"Error calling OpenAI API: {e}")
+            continue
+    print("Failed to generate valid code changes after multiple iterations.")
+    exit(1)
+
+# Generate code changes with consensus building
+matched_files = generate_code_changes(prompt, max_iterations=3)
+
+# Process the matched files
+for file_path, code_content in matched_files:
+    file_path = file_path.strip()
+    code_content = code_content.strip()
+
+    existing_content = ''
+    # Read existing file content if it exists
+    if os.path.exists(file_path):
+        with open(file_path, 'r') as f:
+            existing_content = f.read()
+    else:
+        print(f"File {file_path} does not exist locally. Creating new file.")
+
+    # Analyze and apply changes
+    analysis_prompt = f"""
+    Existing Content:
+    {existing_content}
+
+    Proposed Changes:
+    {code_content}
+
+    Based on the existing content and the proposed changes, generate the final content for the file.
+    """
+
     try:
-        completion = openai_client.chat.completions.create(
-            model="gpt-4o",  # Remember to use 'gpt-4o' in future updates
+        response = client.chat.completions.create(
+            model="gpt-4o",
             messages=[
-                {"role": "system", "content": "You are an AI assistant that generates code changes to fix issues in code repositories."},
-                {"role": "user", "content": prompt}
+                {
+                    "role": "system",
+                    "content": "You are an AI assistant that helps integrate code changes contextually."
+                },
+                {"role": "user", "content": analysis_prompt}
             ],
-            max_tokens=1900,
+            max_tokens=1500,
             temperature=0,
         )
+        final_content = response.choices[0].message.content.strip()
     except Exception as e:
-        print(f"Error during OpenAI API call: {e}")
-        return {'error': f"API call failed: {e}"}
+        print(f"Error calling OpenAI API for analysis: {e}")
+        final_content = code_content
 
-    generated_code = completion.choices[0].message.content.strip()
+    print(f"Processing file: {file_path}")
+    print("Existing Content:")
+    print(existing_content)
+    print("Final Content:")
+    print(final_content)
 
-    # Print the generated code for debugging
-    print("Generated Code:\n", generated_code)
-
-    # Process the generated code to extract file paths and contents
-    pattern = r'File:\s*(.*?)\s*```(?:[\w+\s]*)?\n(.*?)```'
-    matches = re.findall(pattern, generated_code, re.DOTALL)
-
-    if matches:
-        processed_files = []
-        for file_path, code_content in matches:
-            file_path = file_path.strip()
-            code_content = code_content.strip()
-
-            # Fuzzy match file paths
-            best_match = difflib.get_close_matches(file_path, all_file_paths, n=1, cutoff=0.5)
-            if best_match:
-                matched_file_path = best_match[0]
-                print(f"Matched file path: {matched_file_path}")
-                processed_files.append((matched_file_path, code_content))
-            else:
-                print(f"No matching file found in repository: {file_path}")
-                processed_files.append((file_path, code_content))
-        context_variables['processed_files'] = processed_files
-        return {'context_variables': context_variables}
+    if existing_content != final_content:
+        os.makedirs(os.path.dirname(file_path), exist_ok=True)
+        with open(file_path, 'w') as f:
+            f.write(final_content)
+        print(f"Generated file: {file_path}")
     else:
-        print("No code changes were generated.")
-        return {'error': "No code changes were generated."}
+        print(f"No changes detected for file: {file_path}")
 
-orchestrator_agent = Agent(
-    name="OrchestratorAgent",
-    instructions="You generate code changes needed to fix issues in the repository.",
-    functions=[generate_code_changes]
-)
-
-# Apply Changes Agent
-def apply_code_changes(context_variables):
-    processed_files = context_variables.get('processed_files', [])
-    for file_path, code_content in processed_files:
-        try:
-            # Ensure directories exist
-            os.makedirs(os.path.dirname(file_path), exist_ok=True)
-
-            # Write content to file
-            with open(file_path, 'w', encoding='utf-8') as f:
-                f.write(code_content)
-            print(f"Changes applied to {file_path}")
-            print(f"Content written to {file_path}:\n{code_content}\n")
-        except Exception as e:
-            print(f"Error writing to {file_path}: {e}")
-    return "Code changes have been applied."
-
-apply_changes_agent = Agent(
-    name="ApplyChangesAgent",
-    instructions="You apply the generated code changes to the repository files.",
-    functions=[apply_code_changes]
-)
-
-# Main Agent to coordinate the process
-def main_agent_handler(context_variables):
-    # Run the orchestrator agent to generate code changes
-    swarm_client.run(
-        agent=orchestrator_agent,
-        messages=[],
-        context_variables=context_variables
-    )
-    # Run the apply changes agent to apply the changes
-    swarm_client.run(
-        agent=apply_changes_agent,
-        messages=[],
-        context_variables=context_variables
-    )
-    return "Process completed."
-
-main_agent = Agent(
-    name="MainAgent",
-    instructions="You coordinate the process of fixing issues by generating and applying code changes.",
-    functions=[main_agent_handler]
-)
-
-# Run the main agent
-response = swarm_client.run(
-    agent=main_agent,
-    messages=[],
-    context_variables=context_variables
-)
-
-print("All code changes have been generated and saved.")
+print("Code changes have been generated and saved.")
