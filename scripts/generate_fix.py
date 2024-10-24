@@ -160,7 +160,7 @@ If any of the specified files do not exist, adjust the code to fit within existi
         temperature=0,
     )
 
-    generated_code = completion.choices[0].message['content'].strip()
+    generated_code = completion.choices[0].message.content.strip()
 
     # Process the generated code to extract file paths and contents
     pattern = r'File:\s*(.*?)\s*```(?:[\w+]+)?\n(.*?)```'
@@ -229,37 +229,37 @@ You are an AI assistant that helps integrate code changes into existing files.
 - Do not mention any token limits or truncation in your response.
 """
 
-    try:
-        # Generate final content
-        completion = openai_client.chat.completions.create(
-            model="gpt-4o",
-            messages=[
-                {"role": "system", "content": "You integrate proposed code changes into existing files without adding any explanations."},
-                {"role": "user", "content": analysis_prompt}
-            ],
-            max_tokens=1900,  # Reserve some tokens for the prompt
-            temperature=0,
-        )
-        final_content = response.choices[0].message.content.strip()
+        try:
+            # Generate final content
+            completion = openai_client.chat.completions.create(
+                model="gpt-4o",  # Use the correct model name
+                messages=[
+                    {"role": "system", "content": "You integrate proposed code changes into existing files without adding any explanations."},
+                    {"role": "user", "content": analysis_prompt}
+                ],
+                max_tokens=1900,  # Reserve some tokens for the prompt
+                temperature=0,
+            )
+            final_content = completion.choices[0].message.content.strip()
 
-        # Remove any code fencing or markdown formatting
-        final_content = re.sub(r'^```[\w]*\n', '', final_content)
-        final_content = re.sub(r'\n```$', '', final_content)
+            # Remove any code fencing or markdown formatting
+            final_content = re.sub(r'^```[\w]*\n', '', final_content)
+            final_content = re.sub(r'\n```$', '', final_content)
 
-        # Remove any potential leading/trailing explanations
-        final_content = final_content.strip()
+            # Remove any potential leading/trailing explanations
+            final_content = final_content.strip()
 
-        # Write the final content to the file
-        os.makedirs(os.path.dirname(file_path), exist_ok=True)
-        with open(file_path, 'w', encoding='utf-8') as f:
-            f.write(final_content)
-        print(f"Changes applied to {file_path}")
-    except Exception as e:
-        print(f"Error in apply_changes_agent for {file_path}: {e}")
-        # Fallback to writing the code_content directly
-        with open(file_path, 'w', encoding='utf-8') as f:
-            f.write(code_content)
-        print(f"Written proposed changes directly to {file_path}")
+            # Write the final content to the file
+            os.makedirs(os.path.dirname(file_path), exist_ok=True)
+            with open(file_path, 'w', encoding='utf-8') as f:
+                f.write(final_content)
+            print(f"Changes applied to {file_path}")
+        except Exception as e:
+            print(f"Error in apply_code_changes for {file_path}: {e}")
+            # Fallback to writing the code_content directly
+            with open(file_path, 'w', encoding='utf-8') as f:
+                f.write(code_content)
+            print(f"Written proposed changes directly to {file_path}")
     return "Code changes have been applied."
 
 apply_changes_agent = Agent(
