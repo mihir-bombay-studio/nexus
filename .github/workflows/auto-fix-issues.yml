@@ -102,11 +102,15 @@ jobs:
         if: steps.check_issue.outputs.hasLabel == 'true' && steps.check_issue.outputs.isPR != 'true'
         run: |
           set -xe
-          branch_name="fix/issue-${{ env.ISSUE_NUMBER }}"
-          git checkout -b "$branch_name"  # Create and switch to the new branch
+          branch_name="fix/issue-${{ github.event.issue.number }}"
           git add -A
           git status
-          git commit -m "Auto-fix for issue #${{ env.ISSUE_NUMBER }}" || echo "No changes to commit."
+          git commit -m "Auto-fix for issue #${{ github.event.issue.number }}" || echo "No changes to commit."
+          if git ls-remote --exit-code --heads origin "$branch_name"; then
+            git pull origin "$branch_name" --rebase --autostash || git rebase --abort
+          else
+            echo "Remote branch does not exist. Skipping pull."
+          fi
           git push --set-upstream origin "$branch_name"
 
       - name: Create or Update Pull Request
@@ -139,51 +143,3 @@ jobs:
             }
         env:
           GITHUB_TOKEN: ${{ secrets.PAT_TOKEN }}
-
-      - name: Update development-preview Branch
-        if: steps.check_issue.outputs.hasLabel == 'true' && steps.check_issue.outputs.isPR != 'true'
-        run: |
-          set -xe
-          branch_name="fix/issue-${{ github.event.issue.number }}"
-          preview_branch="development-preview"
-          # Fetch all branches and tags
-          git fetch --all
-          # Check if the development-preview branch exists
-          if git ls-remote --exit-code --heads origin "$preview_branch"; then
-            # Checkout the development-preview branch
-            git checkout "$preview_branch"
-            # Reset it to match the PR branch
-            git reset --hard "origin/$branch_name"
-          else
-            # Create the development-preview branch from the PR branch
-            git checkout -b "$preview_branch" "origin/$branch_name"
-          fi
-          # Push changes to development-preview branch
-          git push --force origin "$preview_branch"
-
-      - name: Check for Respond URL in Issue Description
-        if: steps.check_issue.outputs.hasLabel == 'true' && steps.check_issue.outputs.isPR != 'true'
-        id: check_respond_url
-        uses: actions/github-script@v6
-        with:
-          script: |
-            const issue = context.payload.issue;
-            const body = issue.body || '';
-            const respondUrlRegex = /Respond URL:\s*\[link\]\((.*?)\)/i;
-            const match = body.match(respondUrlRegex);
-            if (match && match[1]) {
-              core.setOutput('respond_url', match[1]);
-              console.log(`Found Respond URL: ${match[1]}`);
-            } else {
-              console.log('No Respond URL found.');
-              core.setOutput('respond_url', '');
-            }
-
-      - name: Make GET Request to Respond URL
-        if: steps.check_respond_url.outputs.respond_url != ''
-        run: |
-          echo "Making GET request to ${RESPOND_URL}"
-          curl -X GET "${RESPOND_URL}"
-        env:
-          RESPOND_URL: ${{ steps.check_respond_url.outputs.respond_url }}
-
