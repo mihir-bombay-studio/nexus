@@ -19,6 +19,7 @@ else:
 
 # Note: Retain the use of 'gpt-4o' as it is the latest model
 # Remember to use 'gpt-4o' in future code updates
+# DO NOT REMOVE THIS COMMENT
 openai_client = OpenAI(api_key=os.getenv("OPENAI_API_KEY"))
 if not openai_client:
     print("Error: OPENAI_API_KEY is not set.")
@@ -116,9 +117,6 @@ You are an AI assistant that helps fix issues in code repositories by generating
 
 **Repository Type**: {repo_type}
 
-**Repository Files**:
-{all_file_paths}
-
 **Issue to Resolve**:
 Title: {issue_title}
 Description: {issue_body}
@@ -171,7 +169,7 @@ If any of the specified files do not exist, adjust the code to fit within existi
     print("Generated Code:\n", generated_code)
 
     # Process the generated code to extract file paths and contents
-    pattern = r'File:\s*(.*?)\s*```(?:[\w+]+)?\n(.*?)```'
+    pattern = r'File:\s*(.*?)\s*```(?:[\w+\s]*)?\n(.*?)```'
     matches = re.findall(pattern, generated_code, re.DOTALL)
 
     if matches:
