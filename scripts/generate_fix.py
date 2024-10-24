@@ -131,20 +131,27 @@ Comments: {comments_text}
 - Include accurate file paths and content.
 - Respond **only** with the code changes in the following format:
 
-  **File**: path/to/file.extension  ````
-  <file content>  ````
+File: path/to/file.extension
+```
+<rewritten_file content>
+```
 
-If multiple files need to be changed, repeat the format for each file.
+If multiple files need to be changed, separate them accordingly.
 
 Do **not** include any explanations or additional text.
 
 Ensure that the code is complete and not cut off.
 
-If any of the specified files do not exist, they will be created.
+If any of the specified files do not exist, adjust the code to fit within existing files.
+
+**Important Restrictions**:
+
+- Limit the response to **2000 tokens** to prevent output truncation.
+- Do not mention any token limits or truncation in your response.
 """
 
     completion = openai_client.chat.completions.create(
-        model="gpt-4-0613",
+        model="gpt-4o",
         messages=[
             {"role": "system", "content": "You are an AI assistant that generates code changes to fix issues in code repositories."},
             {"role": "user", "content": prompt}
