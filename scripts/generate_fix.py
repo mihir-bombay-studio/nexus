@@ -90,23 +90,25 @@ all_file_paths = get_all_file_paths(repo)
 
 # Prepare the prompt for OpenAI
 prompt = rf"""
-Repository Type: {repo_type}
+You are an AI assistant that helps fix issues in code repositories.
 
-Repository Files:
-{all_file_paths}
+**Repository Type**: {repo_type}
 
-Issue Title:
+**Issue Title**:
 {issue_title}
 
-Issue Description:
+**Issue Description**:
 {issue_body}
 
-Comments:
+**Comments**:
 {comments_text}
 
-Based on the above information, generate the code changes needed to fix the issue. Provide the code changes in a way that can be directly applied to the codebase. Include accurate file paths and content.
+**Instructions**:
 
-Respond **only** with the code changes in the following format:
+- Generate the code changes needed to fix the issue.
+- Provide code changes that can be directly applied to the codebase.
+- Include accurate file paths and content.
+- Respond **only** with the code changes in the following format:
 
 File: path/to/file.extension
 \`\`\`
@@ -116,6 +118,8 @@ File: path/to/file.extension
 If multiple files need to be changed, separate them accordingly.
 
 Do not include any explanations or additional text.
+
+Ensure that the code is complete and not cut off.
 """
 
 print("Prompt prepared for OpenAI.")
@@ -139,13 +143,12 @@ def generate_code_changes(prompt, max_iterations=3):
             )
             generated_code = response.choices[0].message.content.strip()
             print("Received response from OpenAI.")
-
             # Debugging: Print the generated code
             print("Generated Code:")
             print(generated_code)
 
             # Regex to match file paths and code blocks
-            pattern = r'File:\s*(.*?)\s*```(?:[\w+]+)?\n(.*?)```'
+            pattern = r'File:\s*(.*?)\s*```(?:[\w+\s]*)\n(.*?)```'
 
             matches = re.findall(pattern, generated_code, re.DOTALL)
 
@@ -169,6 +172,7 @@ def generate_code_changes(prompt, max_iterations=3):
                     matched_files.append((matched_file_path, code_content))
                 else:
                     print(f"No matching file found in repository for: {file_path}")
+                    matched_files.append((file_path, code_content))  # Allow creation of new files if needed
 
             if matched_files:
                 return matched_files
@@ -180,6 +184,7 @@ def generate_code_changes(prompt, max_iterations=3):
                 prompt_adjustment = f"\nNote: The files {missing_files} do not exist in the repository. Please only use existing files."
 
                 prompt += prompt_adjustment
+
         except Exception as e:
             print(f"Error calling OpenAI API: {e}")
             continue
@@ -204,14 +209,18 @@ for file_path, code_content in matched_files:
 
     # Analyze and apply changes
     analysis_prompt = f"""
-    Existing Content:
-    {existing_content}
+You are assisting in integrating code changes into existing files.
 
-    Proposed Changes:
-    {code_content}
+- Existing Content:
+{existing_content}
 
-    Based on the existing content and the proposed changes, generate the final content for the file.
-    """
+- Proposed Changes:
+{code_content}
+
+Based on the existing content and the proposed changes, generate the final content for the file.
+
+Provide **only** the updated file content, without any explanations or additional text.
+"""
 
     try:
         response = client.chat.completions.create(
@@ -238,7 +247,10 @@ for file_path, code_content in matched_files:
     print(final_content)
 
     if existing_content != final_content:
-        os.makedirs(os.path.dirname(file_path), exist_ok=True)
+        dir_name = os.path.dirname(file_path)
+        if dir_name:
+            os.makedirs(dir_name, exist_ok=True)
+        # Handle case where dir_name is empty (i.e., file is in the current directory)
         with open(file_path, 'w') as f:
             f.write(final_content)
         print(f"Generated file: {file_path}")
