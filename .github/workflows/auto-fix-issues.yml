@@ -68,7 +68,7 @@ jobs:
           if git ls-remote --exit-code --heads origin "$branch_name"; then
             git checkout "$branch_name"
             git pull origin "$branch_name"
-          else:
+          else
             git checkout -b "$branch_name" origin/${{ github.event.repository.default_branch }}
           fi
           git merge --no-edit origin/${{ github.event.repository.default_branch }}
