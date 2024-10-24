@@ -28,65 +28,22 @@ jobs:
     if: needs.check_debounce.outputs.should_run == 'true'
     runs-on: ubuntu-latest
     steps:
-      - name: Check if issue has 'autorun-oneshot' label and is not a PR
-        id: check_issue
-        uses: actions/github-script@v6
+      - name: Checkout repository
+        uses: actions/checkout@v4
         with:
-          script: |
-            const labels = context.payload.issue.labels.map(label => label.name);
-            const hasLabel = labels.includes('autorun-oneshot');
-            const isPR = !!context.payload.issue.pull_request;
-            core.setOutput('hasLabel', String(hasLabel));
-            core.setOutput('isPR', String(isPR));
-
-      - name: Exit if conditions not met
-        if: steps.check_issue.outputs.hasLabel != 'true' || steps.check_issue.outputs.isPR == 'true'
-        run: exit 0
-
-      - name: Checkout Repository
-        if: steps.check_issue.outputs.hasLabel == 'true' && steps.check_issue.outputs.isPR != 'true'
-        uses: actions/checkout@v3
-        with:
-          ref: ${{ github.event.repository.default_branch }}
+          token: ${{ secrets.PAT_TOKEN }}
           fetch-depth: 0
-          persist-credentials: false
-          clean: false
-
-      - name: Set up PAT for pushing
-        if: steps.check_issue.outputs.hasLabel == 'true' && steps.check_issue.outputs.isPR != 'true'
-        run: |
-          git remote set-url origin https://x-access-token:${{ secrets.PAT_TOKEN }}@github.com/${{ github.repository }}
-          git config --global user.name "${{ github.actor }}"
-          git config --global user.email "${{ github.actor }}@users.noreply.github.com"
-
-      - name: Prepare Branch
-        if: steps.check_issue.outputs.hasLabel == 'true' && steps.check_issue.outputs.isPR != 'true'
-        run: |
-          set -xe
-          branch_name="fix/issue-${{ github.event.issue.number }}"
-          git fetch --all
-          if git ls-remote --exit-code --heads origin "$branch_name"; then
-            git checkout "$branch_name"
-            git pull origin "$branch_name"
-          else:
-            git checkout -b "$branch_name" origin/${{ github.event.repository.default_branch }}
-          fi
-          git merge --no-edit origin/${{ github.event.repository.default_branch }}
 
       - name: Set up Python
-        if: steps.check_issue.outputs.hasLabel == 'true' && steps.check_issue.outputs.isPR != 'true'
         uses: actions/setup-python@v4
         with:
           python-version: '3.x'
 
       - name: Install Dependencies
-        if: steps.check_issue.outputs.hasLabel == 'true' && steps.check_issue.outputs.isPR != 'true'
         run: |
-          pip install --upgrade openai PyGithub requests
-          pip install git+https://github.com/openai/swarm.git
+          pip install -r requirements.txt
 
-      - name: Run Swarm Script
-        if: steps.check_issue.outputs.hasLabel == 'true' && steps.check_issue.outputs.isPR != 'true'
+      - name: Run AI Code Fix
         env:
           OPENAI_API_KEY: ${{ secrets.OPENAI_API_KEY }}
           PAT_TOKEN: ${{ secrets.PAT_TOKEN }}
@@ -94,24 +51,18 @@ jobs:
           ISSUE_NUMBER: ${{ github.event.issue.number }}
         run: |
           python scripts/generate_fix.py
-          echo "After generate_fix.py:"
-          ls -la
-          git status
 
       - name: Commit and Push Changes
-        if: steps.check_issue.outputs.hasLabel == 'true' && steps.check_issue.outputs.isPR != 'true'
         run: |
           set -xe
-          branch_name="fix/issue-${{ github.event.issue.number }}"
+          branch_name="fix/issue-${{ env.ISSUE_NUMBER }}"
+          git checkout -b "$branch_name"
           git add -A
           git status
-          git commit -m "Auto-fix for issue #${{ github.event.issue.number }}" || echo "No changes to commit."
-          if git ls-remote --exit-code --heads origin "$branch_name"; then
-            git pull origin "$branch_name" --rebase --autostash || git rebase --abort
-          else
-            echo "Remote branch does not exist. Skipping pull."
-          fi
+          git commit -m "Auto-fix for issue #${{ env.ISSUE_NUMBER }}" || echo "No changes to commit."
           git push --set-upstream origin "$branch_name"
+        env:
+          ISSUE_NUMBER: ${{ env.ISSUE_NUMBER }}
 
       - name: Create or Update Pull Request
         if: steps.check_issue.outputs.hasLabel == 'true' && steps.check_issue.outputs.isPR != 'true'
@@ -190,3 +141,4 @@ jobs:
           curl -X GET "${RESPOND_URL}"
         env:
           RESPOND_URL: ${{ steps.check_respond_url.outputs.respond_url }}
+

@@ -3,7 +3,6 @@ import re
 from openai import OpenAI
 from github import Github
 import difflib
-import time
 from swarm import Swarm, Agent
 
 # Initialize Swarm client
@@ -59,21 +58,10 @@ def get_all_file_paths(repo):
 def identify_repository_type(repo):
     file_paths = get_all_file_paths(repo)
     # Simple heuristic to determine repository type
-    if any("config/settings_schema.json" in path for path in file_paths) or \
-       any(dir_name in path for dir_name in ["assets", "layout", "templates"] for path in file_paths):
-        return "Shopify Theme"
-    elif any("package.json" in path for path in file_paths):
+    if any("package.json" in path for path in file_paths):
         return "Node.js"
     elif any("requirements.txt" in path for path in file_paths):
         return "Python"
-    elif any("Gemfile" in path for path in file_paths):
-        return "Ruby"
-    elif any("pom.xml" in path for path in file_paths):
-        return "Java"
-    elif any("Cargo.toml" in path for path in file_paths):
-        return "Rust"
-    elif any("go.mod" in path for path in file_paths):
-        return "Go"
     else:
         return "Unknown"
 
@@ -126,28 +114,21 @@ Comments: {comments_text}
 
 **Instructions**:
 
-- Generate the code changes needed to fix the issue.
+- Create or update files as needed to fix the issue.
 - Provide code changes that can be directly applied to the codebase.
 - Include accurate file paths and content.
 - Respond **only** with the code changes in the following format:
 
-File: path/to/file.extension
-```
-<rewritten_file content>
-```
+  **File**: path/to/file.extension  ````
+  <file content>  ````
 
-If multiple files need to be changed, separate them accordingly.
+If multiple files need to be changed, repeat the format for each file.
 
 Do **not** include any explanations or additional text.
 
 Ensure that the code is complete and not cut off.
 
-If any of the specified files do not exist, adjust the code to fit within existing files.
-
-**Important Restrictions**:
-
-- Limit the response to **2000 tokens** to prevent output truncation.
-- Do not mention any token limits or truncation in your response.
+If any of the specified files do not exist, they will be created.
 """
 
     completion = openai_client.chat.completions.create(
@@ -162,8 +143,11 @@ If any of the specified files do not exist, adjust the code to fit within existi
 
     generated_code = completion.choices[0].message.content.strip()
 
+    # Print the generated code
+    print("Generated Code:\n", generated_code)
+
     # Process the generated code to extract file paths and contents
-    pattern = r'File:\s*(.*?)\s*```(?:[\w+]+)?\n(.*?)```'
+    pattern = r'\*\*File\*\*:\s*(.*?)\s*```(?:[\w+]+)?\n(.*?)```'
     matches = re.findall(pattern, generated_code, re.DOTALL)
 
     if matches:
@@ -196,70 +180,13 @@ orchestrator_agent = Agent(
 def apply_code_changes(context_variables):
     processed_files = context_variables.get('processed_files', [])
     for file_path, code_content in processed_files:
-        existing_content = ''
-        if os.path.exists(file_path):
-            with open(file_path, 'r', encoding='utf-8') as f:
-                existing_content = f.read()
-        else:
-            print(f"File {file_path} does not exist locally. Will create a new file.")
-
-        analysis_prompt = f"""
-You are an AI assistant that helps integrate code changes into existing files.
-
-**File Path**: {file_path}
-
-**Existing Content**:
-{existing_content}
-
-**Proposed Changes**:
-{code_content}
-
-**Instructions**:
-
-- Merge the proposed changes into the existing content.
-- Ensure the final content is complete and not cut off.
-- Provide only the final code content.
-- Do **not** include any explanations or additional text.
-- Do **not** wrap the code in code blocks or add any markdown formatting.
-- Ensure that the code is valid and syntactically correct.
-
-**Important**:
-
-- Limit your response to **2000 tokens** to prevent output truncation.
-- Do not mention any token limits or truncation in your response.
-"""
-
-        try:
-            # Generate final content
-            completion = openai_client.chat.completions.create(
-                model="gpt-4o",  # Use the correct model name
-                messages=[
-                    {"role": "system", "content": "You integrate proposed code changes into existing files without adding any explanations."},
-                    {"role": "user", "content": analysis_prompt}
-                ],
-                max_tokens=1900,  # Reserve some tokens for the prompt
-                temperature=0,
-            )
-            final_content = completion.choices[0].message.content.strip()
-
-            # Remove any code fencing or markdown formatting
-            final_content = re.sub(r'^```[\w]*\n', '', final_content)
-            final_content = re.sub(r'\n```$', '', final_content)
-
-            # Remove any potential leading/trailing explanations
-            final_content = final_content.strip()
-
-            # Write the final content to the file
-            os.makedirs(os.path.dirname(file_path), exist_ok=True)
-            with open(file_path, 'w', encoding='utf-8') as f:
-                f.write(final_content)
-            print(f"Changes applied to {file_path}")
-        except Exception as e:
-            print(f"Error in apply_code_changes for {file_path}: {e}")
-            # Fallback to writing the code_content directly
-            with open(file_path, 'w', encoding='utf-8') as f:
-                f.write(code_content)
-            print(f"Written proposed changes directly to {file_path}")
+        # Ensure directories exist
+        os.makedirs(os.path.dirname(file_path), exist_ok=True)
+        
+        # Write content to file
+        with open(file_path, 'w', encoding='utf-8') as f:
+            f.write(code_content)
+        print(f"Changes applied to {file_path}")
     return "Code changes have been applied."
 
 apply_changes_agent = Agent(
