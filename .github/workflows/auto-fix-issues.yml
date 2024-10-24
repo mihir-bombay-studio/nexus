@@ -1,0 +1,179 @@
+name: Auto-Fix Issues with LLM
+
+on:
+  issues:
+    types: [opened, edited, labeled]
+
+permissions:
+  contents: write
+  issues: write
+  pull-requests: write
+  actions: read
+
+jobs:
+  process_issue:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Check if issue has 'autorun-oneshot' label and is not a PR
+        id: check_issue
+        uses: actions/github-script@v6
+        with:
+          script: |
+            const labels = context.payload.issue.labels.map(label => label.name);
+            const hasLabel = labels.includes('autorun-oneshot');
+            const isPR = !!context.payload.issue.pull_request;
+            core.setOutput('hasLabel', String(hasLabel));
+            core.setOutput('isPR', String(isPR));
+
+      - name: Exit if conditions not met
+        if: steps.check_issue.outputs.hasLabel != 'true' || steps.check_issue.outputs.isPR == 'true'
+        run: exit 0
+
+      - name: Checkout Repository
+        if: steps.check_issue.outputs.hasLabel == 'true' && steps.check_issue.outputs.isPR != 'true'
+        uses: actions/checkout@v3
+        with:
+          ref: ${{ github.event.repository.default_branch }}
+          fetch-depth: 0
+          persist-credentials: false
+          clean: false
+
+      - name: Set up PAT for pushing
+        if: steps.check_issue.outputs.hasLabel == 'true' && steps.check_issue.outputs.isPR != 'true'
+        run: |
+          git remote set-url origin https://x-access-token:${{ secrets.PAT_TOKEN }}@github.com/${{ github.repository }}
+          git config --global user.name "${{ github.actor }}"
+          git config --global user.email "${{ github.actor }}@users.noreply.github.com"
+
+      - name: Prepare Branch
+        if: steps.check_issue.outputs.hasLabel == 'true' && steps.check_issue.outputs.isPR != 'true'
+        run: |
+          set -xe
+          branch_name="fix/issue-${{ github.event.issue.number }}"
+          git fetch --all
+          if git ls-remote --exit-code --heads origin "$branch_name"; then
+            git checkout "$branch_name"
+            git pull origin "$branch_name"
+          else:
+            git checkout -b "$branch_name" origin/${{ github.event.repository.default_branch }}
+          fi
+          git merge --no-edit origin/${{ github.event.repository.default_branch }}
+
+      - name: Set up Python
+        if: steps.check_issue.outputs.hasLabel == 'true' && steps.check_issue.outputs.isPR != 'true'
+        uses: actions/setup-python@v4
+        with:
+          python-version: '3.x'
+
+      - name: Install Dependencies
+        if: steps.check_issue.outputs.hasLabel == 'true' && steps.check_issue.outputs.isPR != 'true'
+        run: |
+          pip install --upgrade openai PyGithub requests
+          pip install git+https://github.com/openai/swarm.git
+
+      - name: Run Swarm Script
+        if: steps.check_issue.outputs.hasLabel == 'true' && steps.check_issue.outputs.isPR != 'true'
+        env:
+          OPENAI_API_KEY: ${{ secrets.OPENAI_API_KEY }}
+          PAT_TOKEN: ${{ secrets.PAT_TOKEN }}
+          REPO_NAME: ${{ github.repository }}
+          ISSUE_NUMBER: ${{ github.event.issue.number }}
+        run: |
+          python scripts/generate_fix.py
+          echo "After generate_fix.py:"
+          ls -la
+          git status
+
+      - name: Commit and Push Changes
+        if: steps.check_issue.outputs.hasLabel == 'true' && steps.check_issue.outputs.isPR != 'true'
+        run: |
+          set -xe
+          branch_name="fix/issue-${{ github.event.issue.number }}"
+          git add -A
+          git status
+          git commit -m "Auto-fix for issue #${{ github.event.issue.number }}" || echo "No changes to commit."
+          if git ls-remote --exit-code --heads origin "$branch_name"; then
+            git pull origin "$branch_name" --rebase --autostash || git rebase --abort
+          else
+            echo "Remote branch does not exist. Skipping pull."
+          fi
+          git push --set-upstream origin "$branch_name"
+
+      - name: Create or Update Pull Request
+        if: steps.check_issue.outputs.hasLabel == 'true' && steps.check_issue.outputs.isPR != 'true'
+        uses: actions/github-script@v6
+        with:
+          script: |
+            const issueNumber = context.issue.number;
+            const branchName = `fix/issue-${issueNumber}`;
+            const prTitle = `Auto-fix for issue #${issueNumber}`;
+            const prBody = `This pull request was automatically generated to address issue #${issueNumber}.`;
+            const { data: pulls } = await github.rest.pulls.list({
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              head: `${context.repo.owner}:${branchName}`,
+              state: 'open',
+            });
+            if (pulls.length > 0) {
+              console.log(`Pull request already exists: ${pulls[0].html_url}`);
+            } else {
+              const response = await github.rest.pulls.create({
+                owner: context.repo.owner,
+                repo: context.repo.repo,
+                title: prTitle,
+                head: branchName,
+                base: context.payload.repository.default_branch,
+                body: prBody,
+              });
+              console.log(`Pull request created: ${response.data.html_url}`);
+            }
+        env:
+          GITHUB_TOKEN: ${{ secrets.PAT_TOKEN }}
+
+      - name: Update development-preview Branch
+        if: steps.check_issue.outputs.hasLabel == 'true' && steps.check_issue.outputs.isPR != 'true'
+        run: |
+          set -xe
+          branch_name="fix/issue-${{ github.event.issue.number }}"
+          preview_branch="development-preview"
+          # Fetch all branches and tags
+          git fetch --all
+          # Check if the development-preview branch exists
+          if git ls-remote --exit-code --heads origin "$preview_branch"; then
+            # Checkout the development-preview branch
+            git checkout "$preview_branch"
+            # Reset it to match the PR branch
+            git reset --hard "origin/$branch_name"
+          else
+            # Create the development-preview branch from the PR branch
+            git checkout -b "$preview_branch" "origin/$branch_name"
+          fi
+          # Push changes to development-preview branch
+          git push --force origin "$preview_branch"
+
+      - name: Check for Respond URL in Issue Description
+        if: steps.check_issue.outputs.hasLabel == 'true' && steps.check_issue.outputs.isPR != 'true'
+        id: check_respond_url
+        uses: actions/github-script@v6
+        with:
+          script: |
+            const issue = context.payload.issue;
+            const body = issue.body || '';
+            const respondUrlRegex = /Respond URL:\s*\[link\]\((.*?)\)/i;
+            const match = body.match(respondUrlRegex);
+            if (match && match[1]) {
+              core.setOutput('respond_url', match[1]);
+              console.log(`Found Respond URL: ${match[1]}`);
+            } else {
+              console.log('No Respond URL found.');
+              core.setOutput('respond_url', '');
+            }
+
+      - name: Make GET Request to Respond URL
+        if: steps.check_respond_url.outputs.respond_url != ''
+        run: |
+          echo "Making GET request to ${RESPOND_URL}"
+          curl -X GET "${RESPOND_URL}"
+        env:
+          RESPOND_URL: ${{ steps.check_respond_url.outputs.respond_url }}
+
