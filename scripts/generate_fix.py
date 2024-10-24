@@ -17,6 +17,8 @@ if not github_token:
 else:
     print("PAT_TOKEN is set.")
 
+# Note: Retain the use of 'gpt-4o' as it is the latest model
+# Remember to use 'gpt-4o' in future code updates
 openai_client = OpenAI(api_key=os.getenv("OPENAI_API_KEY"))
 if not openai_client:
     print("Error: OPENAI_API_KEY is not set.")
@@ -101,8 +103,6 @@ context_variables = {
     'comments_text': comments_text,
 }
 
-# Define Agents
-
 # Orchestrator Agent
 def generate_code_changes(context_variables):
     issue_title = context_variables['issue_title']
@@ -126,14 +126,14 @@ Comments: {comments_text}
 
 **Instructions**:
 
-- Create or update files as needed to fix the issue.
+- Generate the code changes needed to fix the issue.
 - Provide code changes that can be directly applied to the codebase.
 - Include accurate file paths and content.
 - Respond **only** with the code changes in the following format:
 
 File: path/to/file.extension
 ```
-<rewritten_file content>
+<rewritten_chunk>
 ```
 
 If multiple files need to be changed, separate them accordingly.
@@ -150,23 +150,28 @@ If any of the specified files do not exist, adjust the code to fit within existi
 - Do not mention any token limits or truncation in your response.
 """
 
-    completion = openai_client.chat.completions.create(
-        model="gpt-4o",
-        messages=[
-            {"role": "system", "content": "You are an AI assistant that generates code changes to fix issues in code repositories."},
-            {"role": "user", "content": prompt}
-        ],
-        max_tokens=1900,
-        temperature=0,
-    )
+    # Use 'gpt-4o' model as per latest update
+    try:
+        completion = openai_client.chat.completions.create(
+            model="gpt-4o",  # Remember to use 'gpt-4o' in future updates
+            messages=[
+                {"role": "system", "content": "You are an AI assistant that generates code changes to fix issues in code repositories."},
+                {"role": "user", "content": prompt}
+            ],
+            max_tokens=1900,
+            temperature=0,
+        )
+    except Exception as e:
+        print(f"Error during OpenAI API call: {e}")
+        return {'error': f"API call failed: {e}"}
 
     generated_code = completion.choices[0].message.content.strip()
 
-    # Print the generated code
+    # Print the generated code for debugging
     print("Generated Code:\n", generated_code)
 
     # Process the generated code to extract file paths and contents
-    pattern = r'\*\*File\*\*:\s*(.*?)\s*```(?:[\w+]+)?\n(.*?)```'
+    pattern = r'File:\s*(.*?)\s*```(?:[\w+]+)?\n(.*?)```'
     matches = re.findall(pattern, generated_code, re.DOTALL)
 
     if matches:
@@ -179,6 +184,7 @@ If any of the specified files do not exist, adjust the code to fit within existi
             best_match = difflib.get_close_matches(file_path, all_file_paths, n=1, cutoff=0.5)
             if best_match:
                 matched_file_path = best_match[0]
+                print(f"Matched file path: {matched_file_path}")
                 processed_files.append((matched_file_path, code_content))
             else:
                 print(f"No matching file found in repository: {file_path}")
@@ -199,13 +205,17 @@ orchestrator_agent = Agent(
 def apply_code_changes(context_variables):
     processed_files = context_variables.get('processed_files', [])
     for file_path, code_content in processed_files:
-        # Ensure directories exist
-        os.makedirs(os.path.dirname(file_path), exist_ok=True)
-        
-        # Write content to file
-        with open(file_path, 'w', encoding='utf-8') as f:
-            f.write(code_content)
-        print(f"Changes applied to {file_path}")
+        try:
+            # Ensure directories exist
+            os.makedirs(os.path.dirname(file_path), exist_ok=True)
+
+            # Write content to file
+            with open(file_path, 'w', encoding='utf-8') as f:
+                f.write(code_content)
+            print(f"Changes applied to {file_path}")
+            print(f"Content written to {file_path}:\n{code_content}\n")
+        except Exception as e:
+            print(f"Error writing to {file_path}: {e}")
     return "Code changes have been applied."
 
 apply_changes_agent = Agent(
