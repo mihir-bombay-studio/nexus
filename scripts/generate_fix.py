@@ -3,6 +3,7 @@ import re
 from openai import OpenAI
 from github import Github
 import difflib
+import time
 from swarm import Swarm, Agent
 
 # Initialize Swarm client
@@ -58,10 +59,21 @@ def get_all_file_paths(repo):
 def identify_repository_type(repo):
     file_paths = get_all_file_paths(repo)
     # Simple heuristic to determine repository type
-    if any("package.json" in path for path in file_paths):
+    if any("config/settings_schema.json" in path for path in file_paths) or \
+       any(dir_name in path for dir_name in ["assets", "layout", "templates"] for path in file_paths):
+        return "Shopify Theme"
+    elif any("package.json" in path for path in file_paths):
         return "Node.js"
     elif any("requirements.txt" in path for path in file_paths):
         return "Python"
+    elif any("Gemfile" in path for path in file_paths):
+        return "Ruby"
+    elif any("pom.xml" in path for path in file_paths):
+        return "Java"
+    elif any("Cargo.toml" in path for path in file_paths):
+        return "Rust"
+    elif any("go.mod" in path for path in file_paths):
+        return "Go"
     else:
         return "Unknown"
 
@@ -132,7 +144,7 @@ If any of the specified files do not exist, they will be created.
 """
 
     completion = openai_client.chat.completions.create(
-        model="gpt-4o",
+        model="gpt-4-0613",
         messages=[
             {"role": "system", "content": "You are an AI assistant that generates code changes to fix issues in code repositories."},
             {"role": "user", "content": prompt}
