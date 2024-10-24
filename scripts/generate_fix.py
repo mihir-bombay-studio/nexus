@@ -7,7 +7,7 @@ import time
 from swarm import Swarm, Agent
 
 # Initialize Swarm client
-client = Swarm()
+swarm_client = Swarm()
 
 # Get environment variables
 github_token = os.getenv("PAT_TOKEN")
@@ -17,8 +17,8 @@ if not github_token:
 else:
     print("PAT_TOKEN is set.")
 
-client = OpenAI(api_key=os.getenv("OPENAI_API_KEY"))
-if not client:
+openai_client = OpenAI(api_key=os.getenv("OPENAI_API_KEY"))
+if not openai_client:
     print("Error: OPENAI_API_KEY is not set.")
     exit(1)
 else:
@@ -150,7 +150,7 @@ If any of the specified files do not exist, adjust the code to fit within existi
 - Do not mention any token limits or truncation in your response.
 """
 
-    completion = client.chat.completions.create(
+    completion = openai_client.chat.completions.create(
         model="gpt-4o",
         messages=[
             {"role": "system", "content": "You are an AI assistant that generates code changes to fix issues in code repositories."},
@@ -231,7 +231,7 @@ You are an AI assistant that helps integrate code changes into existing files.
 
     try:
         # Generate final content
-        completion = client.chat.completions.create(
+        completion = openai_client.chat.completions.create(
             model="gpt-4o",
             messages=[
                 {"role": "system", "content": "You integrate proposed code changes into existing files without adding any explanations."},
@@ -271,13 +271,13 @@ apply_changes_agent = Agent(
 # Main Agent to coordinate the process
 def main_agent_handler(context_variables):
     # Run the orchestrator agent to generate code changes
-    client.run(
+    swarm_client.run(
         agent=orchestrator_agent,
         messages=[],
         context_variables=context_variables
     )
     # Run the apply changes agent to apply the changes
-    client.run(
+    swarm_client.run(
         agent=apply_changes_agent,
         messages=[],
         context_variables=context_variables
@@ -291,7 +291,7 @@ main_agent = Agent(
 )
 
 # Run the main agent
-response = client.run(
+response = swarm_client.run(
     agent=main_agent,
     messages=[],
     context_variables=context_variables
