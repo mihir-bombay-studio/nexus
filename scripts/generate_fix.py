@@ -4,7 +4,7 @@ from openai import OpenAI
 from github import Github
 import difflib
 import time
-from swarm import Swarm, Agent, Result
+from swarm import Swarm, Agent
 
 # Initialize Swarm client
 client = Swarm()
@@ -133,7 +133,7 @@ Comments: {comments_text}
 
 File: path/to/file.extension
 ```
-<file content>
+<rewritten_file content>
 ```
 
 If multiple files need to be changed, separate them accordingly.
@@ -178,14 +178,13 @@ If any of the specified files do not exist, adjust the code to fit within existi
                 matched_file_path = best_match[0]
                 processed_files.append((matched_file_path, code_content))
             else:
-                print(f"No matching file found in repository for: {file_path}")
-                # Optionally, handle new files
+                print(f"No matching file found in repository: {file_path}")
                 processed_files.append((file_path, code_content))
         context_variables['processed_files'] = processed_files
-        return Result(context_variables=context_variables)
+        return {'context_variables': context_variables}
     else:
         print("No code changes were generated.")
-        return "No code changes were generated."
+        return {'error': "No code changes were generated."}
 
 orchestrator_agent = Agent(
     name="OrchestratorAgent",

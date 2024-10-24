@@ -11,7 +11,21 @@ permissions:
   actions: read
 
 jobs:
+  check_debounce:
+    runs-on: ubuntu-latest
+    outputs:
+      should_run: ${{ steps.wait.outputs.should_run }}
+    steps:
+      - name: Wait for other runs to complete
+        id: wait
+        run: |
+          # Wait for 30 seconds to allow any other rapid updates to come in
+          sleep 30
+          echo "should_run=true" >> $GITHUB_OUTPUT
+
   process_issue:
+    needs: check_debounce
+    if: needs.check_debounce.outputs.should_run == 'true'
     runs-on: ubuntu-latest
     steps:
       - name: Check if issue has 'autorun-oneshot' label and is not a PR
@@ -176,4 +190,3 @@ jobs:
           curl -X GET "${RESPOND_URL}"
         env:
           RESPOND_URL: ${{ steps.check_respond_url.outputs.respond_url }}
-
